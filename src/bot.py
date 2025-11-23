@@ -6,6 +6,8 @@ import yadisk
 
 import asyncio
 from dotenv import load_dotenv
+from aiogram.client.session.aiohttp import AiohttpSession
+from aiogram.client.telegram import TelegramAPIServer
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters.command import Command
 from aiogram.types import Message
@@ -21,8 +23,18 @@ load_dotenv()
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 
-# Initialize bot and dispatcher
-bot = Bot(token=os.getenv("BOT_TOKEN"))
+# Initialize bot with local API server for large file support
+logging.info("Initialize bot with local API server...")
+bot = Bot(
+    token=os.getenv("BOT_TOKEN"),
+    session=AiohttpSession(
+        api=TelegramAPIServer(
+            base="http://localhost:8081/bot{token}/{method}",
+            file="http://localhost:8081/file/bot{token}/{path}"
+        )
+    )
+)
+logging.info("Initialize bot with local API server: DONE")
 dp = Dispatcher()
 
 # Global variables
@@ -222,11 +234,10 @@ async def download_and_save_media(message: Message):
         else:
             return False
         
-        # Check file size (Telegram limit is 20MB for bots)
-        if file_size and file_size > 20 * 1024 * 1024:
-            if message.chat.type == 'private':
-                await message.reply("❌ File too large (>20MB). Cannot download.")
-            return False
+        # With local API server, we can handle much larger files
+        # Log file size for monitoring
+        if file_size:
+            logging.info(f"Processing file of size: {file_size / 1024 / 1024:.2f} MB")
         
         # Generate filename: timestamp_user_chatname.ext
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
