@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "aiogram>=3.22.0",
+    "python-dotenv>=1.2.1",
     "requests>=2.32.5",
     "tqdm>=4.67.1",
     "yadisk>=3.4.0",
