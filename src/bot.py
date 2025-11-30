@@ -3,18 +3,22 @@ import os
 from datetime import datetime
 from os.path import join as pjoin
 import yadisk
+from typing import Any, Awaitable, Callable, Dict
+from collections import defaultdict
+import time
 
 import asyncio
 from dotenv import load_dotenv
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.client.telegram import TelegramAPIServer
-from aiogram import Bot, Dispatcher, types, F
+from aiogram import Bot, Dispatcher, types, F, BaseMiddleware
 from aiogram.filters.command import Command
-from aiogram.types import Message
+from aiogram.types import Message, TelegramObject
 from aiogram.enums import ParseMode
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 from aiogram.filters import StateFilter
+from aiogram.exceptions import TelegramRetryAfter
 
 
 # Load environment variables
@@ -27,14 +31,14 @@ logging.basicConfig(level=logging.INFO)
 logging.info("Initialize bot with local API server...")
 bot = Bot(
     token=os.getenv("BOT_TOKEN"),
-    session=AiohttpSession(
-        api=TelegramAPIServer(
-            base="http://localhost:8081/bot{token}/{method}",
-            file="http://localhost:8081/file/bot{token}/{path}"
-        )
-    )
+    # session=AiohttpSession(
+    #     api=TelegramAPIServer(
+    #         base="http://localhost:8081/bot{token}/{method}",
+    #         file="http://localhost:8081/file/bot{token}/{path}"
+    #     )
+    # )
 )
-logging.info("Initialize bot with local API server: DONE")
+# logging.info("Initialize bot with local API server: DONE")
 dp = Dispatcher()
 
 # Global variables
@@ -45,6 +49,45 @@ save_folder: str = "/ChatMediaBackup"  # Default folder
 class CredentialsForm(StatesGroup):
     waiting_for_yandex_token = State()
     waiting_for_folder_path = State()
+
+# Throttling middleware to prevent rate limits
+class ThrottlingMiddleware(BaseMiddleware):
+    def __init__(self, rate_limit: float = 0.5):
+        """
+        rate_limit: minimum seconds between messages to the same chat
+        """
+        self.rate_limit = rate_limit
+        self.last_message_time: Dict[int, float] = defaultdict(float)
+        super().__init__()
+
+    async def __call__(
+        self,
+        handler: Callable[[TelegramObject, Dict[str, Any]], Awaitable[Any]],
+        event: TelegramObject,
+        data: Dict[str, Any]
+    ) -> Any:
+        if isinstance(event, Message):
+            chat_id = event.chat.id
+            current_time = time.time()
+            time_passed = current_time - self.last_message_time[chat_id]
+
+            if time_passed < self.rate_limit:
+                sleep_time = self.rate_limit - time_passed
+                logging.debug(f"Throttling: sleeping for {sleep_time:.2f}s for chat {chat_id}")
+                await asyncio.sleep(sleep_time)
+
+            self.last_message_time[chat_id] = time.time()
+
+        try:
+            return await handler(event, data)
+        except TelegramRetryAfter as e:
+            logging.warning(f"Flood control triggered. Retry after {e.retry_after} seconds")
+            await asyncio.sleep(e.retry_after)
+            # Retry the handler after waiting
+            return await handler(event, data)
+
+# Register the throttling middleware
+dp.message.middleware(ThrottlingMiddleware(rate_limit=0.5))
 
 @dp.message(Command('start'))
 async def send_welcome(message: Message):
@@ -221,11 +264,13 @@ async def download_and_save_media(message: Message):
             # Get the highest resolution photo
             photo = message.photo[-1]
             file_info = await bot.get_file(photo.file_id)
-            file_ext = ".jpg"
+            # Get actual file extension from file_path, default to .jpg if not available
+            file_ext = os.path.splitext(file_info.file_path)[1] or ".jpg"
             file_size = photo.file_size
         elif message.video:
             file_info = await bot.get_file(message.video.file_id)
-            file_ext = ".mp4"
+            # Get actual file extension from file_path, default to .mp4 if not available
+            file_ext = os.path.splitext(file_info.file_path)[1] or ".mp4"
             file_size = message.video.file_size
         elif message.document and message.document.mime_type and message.document.mime_type.startswith(('image/', 'video/')):
             file_info = await bot.get_file(message.document.file_id)
@@ -313,8 +358,9 @@ async def main():
                 types.BotCommand(command="set_folder", description="Set custom folder path"),
                 types.BotCommand(command="status", description="Check bot status"),
             ])
-            # Start polling
-            await dp.start_polling(bot, polling_timeout=30)
+            # Start polling with drop_pending_updates to avoid processing old messages
+            logging.info("Starting bot polling (dropping pending updates)...")
+            await dp.start_polling(bot, polling_timeout=30, drop_pending_updates=True)
 
         except Exception as e:
             logging.error(f"Connection error: {e}")
