@@ -43,7 +43,7 @@ dp = Dispatcher()
 
 # Global variables
 yandex_disk_token: str = os.getenv("YADISK_TOKEN")
-save_folder: str = "/ChatMediaBackup"  # Default folder
+save_folder: str = "/7я_chat"  # Default folder
 
 # FSM States
 class CredentialsForm(StatesGroup):
