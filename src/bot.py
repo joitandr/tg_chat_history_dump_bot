@@ -284,10 +284,11 @@ async def download_and_save_media(message: Message):
         if file_size:
             logging.info(f"Processing file of size: {file_size / 1024 / 1024:.2f} MB")
         
-        # Generate filename: timestamp_user_chatname.ext
+        # Generate filename: timestamp_user_chatname_msgid.ext
+        # Include message_id to ensure uniqueness when multiple photos are sent at once
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         username = message.from_user.username or f"user{message.from_user.id}"
-        filename = f"{timestamp}_{username}_{chat_name}{file_ext}"
+        filename = f"{timestamp}_{username}_{chat_name}_msg{message.message_id}{file_ext}"
         
         # Download file to temporary location
         temp_file_path = f"/tmp/{filename}"
